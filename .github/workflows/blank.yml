@@ -18,7 +18,7 @@ jobs:
   build:
     name: Compile and Test Android
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Checkout repository
@@ -30,13 +30,13 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Configure Gradle
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK components
+      - name: Install Android SDK 34
         run: |
           sdkmanager --install \
             "platform-tools" \
@@ -46,11 +46,11 @@ jobs:
       - name: Verify environment
         run: |
           java -version
-          echo "JAVA_HOME=$JAVA_HOME"
+          sdkmanager --list_installed
           chmod +x ./gradlew
           ./gradlew --version
 
-      - name: Check Kotlin compilation
+      - name: Compile Kotlin
         run: ./gradlew :app:compileDebugKotlin --no-daemon --stacktrace
 
       - name: Run unit tests
@@ -62,7 +62,7 @@ jobs:
         id: apk
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Upload APK
+      - name: Upload Debug APK
         if: always() && steps.apk.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
@@ -82,8 +82,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Report test status
+      - name: Mark workflow failed if tests fail
         if: steps.tests.outcome == 'failure'
         run: |
-          echo "::warning::El APK puede haberse compilado, pero hay pruebas unitarias fallidas."
-          echo "Descarga AmbiorixPOS-Test-Reports para investigar los errores."
+          echo "Las pruebas unitarias fallaron. Consulta AmbiorixPOS-Test-Reports."
+          exit 1
