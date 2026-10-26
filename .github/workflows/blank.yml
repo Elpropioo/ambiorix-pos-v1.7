@@ -1,11 +1,10 @@
 name: Ambiorix POS - Build APK
 
 on:
+  workflow_dispatch:
   push:
     branches: ["**"]
-    tags: ["v*"]
   pull_request:
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,6 +13,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+
+    defaults:
+      run:
+        working-directory: AmbiorixPOS-Android-Project
 
     steps:
       - name: Checkout repository
@@ -28,56 +31,32 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Locate Android project
-        id: project
-        shell: bash
-        run: |
-          echo "Buscando el proyecto Android..."
-          find . -maxdepth 5 \( -name gradlew -o -name settings.gradle -o -name settings.gradle.kts \) -print
-
-          WRAPPER="$(find . -maxdepth 5 -type f -name gradlew -print -quit)"
-          if [ -n "$WRAPPER" ]; then
-            PROJECT_DIR="$(dirname "$WRAPPER")"
-          else
-            SETTINGS="$(find . -maxdepth 5 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)"
-            if [ -z "$SETTINGS" ]; then
-              echo "::error::No se encontró gradlew ni settings.gradle. El repositorio debe contener el proyecto Android."
-              exit 1
-            fi
-            PROJECT_DIR="$(dirname "$SETTINGS")"
-          fi
-
-          echo "Proyecto detectado: $PROJECT_DIR"
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-
-      - name: Verify Java and Gradle wrapper
-        working-directory: ${{ steps.project.outputs.project_dir }}
+      - name: Verify project
         run: |
           java -version
-          if [ ! -f ./gradlew ]; then
-            echo "::error::El proyecto no incluye gradlew. Debes añadir el Gradle Wrapper."
-            exit 1
-          fi
-          chmod +x ./gradlew
+          test -f gradlew
+          test -f settings.gradle.kts
+          chmod +x gradlew
           ./gradlew --version
+
+      - name: Compile Kotlin
+        run: ./gradlew :app:compileDebugKotlin --no-daemon --stacktrace
 
       - name: Build Debug APK
         id: apk
-        working-directory: ${{ steps.project.outputs.project_dir }}
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
       - name: Run unit tests
         id: tests
         continue-on-error: true
-        working-directory: ${{ steps.project.outputs.project_dir }}
-        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
 
       - name: Upload APK
         if: always() && steps.apk.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: AmbiorixPOS-Debug-APK
-          path: ${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/*.apk
+          path: AmbiorixPOS-Android-Project/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
 
@@ -87,13 +66,13 @@ jobs:
         with:
           name: AmbiorixPOS-Test-Reports
           path: |
-            **/build/reports/tests/testDebugUnitTest/
-            **/build/test-results/testDebugUnitTest/
+            AmbiorixPOS-Android-Project/app/build/reports/tests/testDebugUnitTest/
+            AmbiorixPOS-Android-Project/app/build/test-results/testDebugUnitTest/
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Fail workflow if unit tests failed
+      - name: Fail if tests failed
         if: steps.tests.outcome == 'failure'
         run: |
-          echo "::error::La compilación se ejecutó, pero fallaron pruebas unitarias."
+          echo "Las pruebas unitarias fallaron. Revisa los informes."
           exit 1
