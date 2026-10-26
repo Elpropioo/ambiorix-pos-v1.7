@@ -10,19 +10,10 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ambiorix-pos-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build:
-    name: Build and Test Android
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-
-    env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -37,55 +28,56 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Configure Android SDK
+      - name: Locate Android project
+        id: project
+        shell: bash
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          mkdir -p "$ANDROID_HOME"
-          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "Buscando el proyecto Android..."
+          find . -maxdepth 5 \( -name gradlew -o -name settings.gradle -o -name settings.gradle.kts \) -print
 
-      - name: Install Android SDK packages
-        run: |
-          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -n 1)"
-          if [ -z "$SDKMANAGER" ]; then
-            echo "::error::No se encontró sdkmanager en el runner."
-            exit 1
+          WRAPPER="$(find . -maxdepth 5 -type f -name gradlew -print -quit)"
+          if [ -n "$WRAPPER" ]; then
+            PROJECT_DIR="$(dirname "$WRAPPER")"
+          else
+            SETTINGS="$(find . -maxdepth 5 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)"
+            if [ -z "$SETTINGS" ]; then
+              echo "::error::No se encontró gradlew ni settings.gradle. El repositorio debe contener el proyecto Android."
+              exit 1
+            fi
+            PROJECT_DIR="$(dirname "$SETTINGS")"
           fi
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install \
-            "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
 
-      - name: Accept Android SDK licenses
-        run: |
-          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -n 1)"
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
+          echo "Proyecto detectado: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-      - name: Verify environment
+      - name: Verify Java and Gradle wrapper
+        working-directory: ${{ steps.project.outputs.project_dir }}
         run: |
           java -version
+          if [ ! -f ./gradlew ]; then
+            echo "::error::El proyecto no incluye gradlew. Debes añadir el Gradle Wrapper."
+            exit 1
+          fi
           chmod +x ./gradlew
           ./gradlew --version
 
-      - name: Compile Kotlin
-        run: ./gradlew :app:compileDebugKotlin --no-daemon --stacktrace
+      - name: Build Debug APK
+        id: apk
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Run unit tests
         id: tests
         continue-on-error: true
-        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
 
-      - name: Build Debug APK
-        id: apk
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
-
-      - name: Upload Debug APK
+      - name: Upload APK
         if: always() && steps.apk.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: AmbiorixPOS-Debug-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: ${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
 
@@ -95,13 +87,13 @@ jobs:
         with:
           name: AmbiorixPOS-Test-Reports
           path: |
-            app/build/reports/tests/testDebugUnitTest/
-            app/build/test-results/testDebugUnitTest/
+            **/build/reports/tests/testDebugUnitTest/
+            **/build/test-results/testDebugUnitTest/
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Fail if tests failed
+      - name: Fail workflow if unit tests failed
         if: steps.tests.outcome == 'failure'
         run: |
-          echo "::error::Hay pruebas unitarias fallidas. Revisa AmbiorixPOS-Test-Reports."
+          echo "::error::La compilación se ejecutó, pero fallaron pruebas unitarias."
           exit 1
